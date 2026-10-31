@@ -1,34 +1,388 @@
 
-name: Build Royal IPTV APK
+name: Build Royal Cinema APK
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get project
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Gradle
+        shell: bash
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          unzip -q gradle-8.9-bin.zip
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/royal/cinema
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "RoyalCinema"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+          }
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+
+          android {
+              namespace = "com.royal.cinema"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.royal.cinema"
+                  minSdk = 28
+                  targetSdk = 28
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildFeatures {
+                  compose = true
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.10.00"))
+              implementation("androidx.activity:activity-compose:1.9.3")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+              implementation("androidx.media3:media3-exoplayer:1.4.1")
+              implementation("androidx.media3:media3-ui:1.4.1")
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.software.leanback" android:required="false"/>
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="Royal Cinema"
+                  android:usesCleartextTraffic="true"
+                  android:banner="@android:drawable/ic_media_play">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#D4AF37</item>
+                  <item name="android:windowLightNavigationBar">false</item>
+                  <item name="android:navigationBarColor">#080808</item>
+                  <item name="android:windowBackground">#080808</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/java/com/royal/cinema/MainActivity.kt <<'EOF'
+          package com.royal.cinema
+
+          import android.net.Uri
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.focusable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.text.BasicTextField
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.compose.ui.viewinterop.AndroidView
+          import androidx.lifecycle.lifecycleScope
+          import androidx.media3.common.MediaItem
+          import androidx.media3.exoplayer.ExoPlayer
+          import androidx.media3.ui.PlayerView
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+          import java.net.URL
+
+          private val Gold = Color(0xFFD4AF37)
+          private val Black = Color(0xFF080808)
+          private val Panel = Color(0xFF191919)
+
+          data class Channel(val name: String, val url: String)
+
+          class MainActivity : ComponentActivity() {
+              private var player: ExoPlayer? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  player = ExoPlayer.Builder(this).build()
+
+                  setContent {
+                      var playlistUrl by remember { mutableStateOf("") }
+                      var channels by remember { mutableStateOf(emptyList<Channel>()) }
+                      var message by remember {
+                          mutableStateOf("أدخل رابط M3U الخاص بك")
+                      }
+                      var loading by remember { mutableStateOf(false) }
+
+                      MaterialTheme(
+                          colorScheme = darkColorScheme(
+                              primary = Gold,
+                              background = Black,
+                              surface = Panel
+                          )
+                      ) {
+                          Column(
+                              Modifier.fillMaxSize()
+                                  .background(Black)
+                                  .padding(20.dp)
+                          ) {
+                              Text(
+                                  "ROYAL CINEMA",
+                                  color = Gold,
+                                  fontSize = 28.sp
+                              )
+                              Text(
+                                  "YOUR ENTERTAINMENT",
+                                  color = Color.LightGray,
+                                  fontSize = 11.sp
+                              )
+
+                              Spacer(Modifier.height(18.dp))
+
+                              AndroidView(
+                                  factory = { context ->
+                                      PlayerView(context).apply {
+                                          player = this@MainActivity.player
+                                          useController = true
+                                      }
+                                  },
+                                  modifier = Modifier.fillMaxWidth()
+                                      .height(210.dp)
+                              )
+
+                              Spacer(Modifier.height(14.dp))
+
+                              Text(
+                                  "قائمة القنوات M3U",
+                                  color = Gold,
+                                  fontSize = 18.sp
+                              )
+
+                              Spacer(Modifier.height(8.dp))
+
+                              Row(
+                                  verticalAlignment = Alignment.CenterVertically
+                              ) {
+                                  Box(
+                                      Modifier.weight(1f)
+                                          .background(
+                                              Panel,
+                                              RoundedCornerShape(8.dp)
+                                          )
+                                          .padding(12.dp)
+                                  ) {
+                                      if (playlistUrl.isEmpty()) {
+                                          Text(
+                                              "http://example.com/list.m3u",
+                                              color = Color.Gray
+                                          )
+                                      }
+                                      BasicTextField(
+                                          value = playlistUrl,
+                                          onValueChange = { playlistUrl = it },
+                                          textStyle = androidx.compose.ui.text.TextStyle(
+                                              color = Color.White,
+                                              fontSize = 14.sp
+                                          ),
+                                          singleLine = true,
+                                          modifier = Modifier.fillMaxWidth()
+                                      )
+                                  }
+
+                                  Spacer(Modifier.width(8.dp))
+
+                                  Button(
+                                      onClick = {
+                                          lifecycleScope.launch {
+                                              loading = true
+                                              message = "جاري تحميل القائمة..."
+                                              try {
+                                                  val result = withContext(
+                                                      Dispatchers.IO
+                                                  ) {
+                                                      val connection =
+                                                          URL(playlistUrl.trim())
+                                                              .openConnection()
+                                                      connection.connectTimeout = 15000
+                                                      connection.readTimeout = 20000
+                                                      connection.getInputStream()
+                                                          .bufferedReader()
+                                                          .use { it.readLines() }
+                                                  }
+                                                  val parsed = mutableListOf<Channel>()
+                                                  var name = "Channel"
+                                                  for (line in result) {
+                                                      val value = line.trim()
+                                                      if (value.startsWith("#EXTINF")) {
+                                                          name = value.substringAfterLast(",")
+                                                              .trim()
+                                                      } else if (
+                                                          value.startsWith("http://") ||
+                                                          value.startsWith("https://")
+                                                      ) {
+                                                          parsed.add(Channel(name, value))
+                                                          name = "Channel"
+                                                      }
+                                                  }
+                                                  channels = parsed
+                                                  message = if (parsed.isEmpty()) {
+                                                      "ما لقينا قنوات بالقائمة"
+                                                  } else {
+                                                      "تم تحميل ${parsed.size} قناة"
+                                                  }
+                                              } catch (e: Exception) {
+                                                  message = "تعذر تحميل القائمة. تحقق من الرابط والإنترنت."
+                                              }
+                                              loading = false
+                                          }
+                                      },
+                                      enabled = !loading && playlistUrl.isNotBlank()
+                                  ) {
+                                      Text(if (loading) "..." else "تحميل")
+                                  }
+                              }
+
+                              Spacer(Modifier.height(10.dp))
+                              Text(message, color = Gold, fontSize = 13.sp)
+                              Spacer(Modifier.height(8.dp))
+
+                              LazyColumn(
+                                  modifier = Modifier.fillMaxSize(),
+                                  verticalArrangement = Arrangement.spacedBy(6.dp)
+                              ) {
+                                  items(channels) { channel ->
+                                      Row(
+                                          Modifier.fillMaxWidth()
+                                              .background(
+                                                  Panel,
+                                                  RoundedCornerShape(8.dp)
+                                              )
+                                              .clickable {
+                                                  player?.setMediaItem(
+                                                      MediaItem.fromUri(
+                                                          Uri.parse(channel.url)
+                                                      )
+                                                  )
+                                                  player?.prepare()
+                                                  player?.play()
+                                              }
+                                              .focusable()
+                                              .padding(14.dp),
+                                          verticalAlignment = Alignment.CenterVertically
+                                      ) {
+                                          Text("▶", color = Gold)
+                                          Spacer(Modifier.width(12.dp))
+                                          Text(
+                                              channel.name,
+                                              color = Color.White
+                                          )
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              override fun onStop() {
+                  super.onStop()
+                  player?.pause()
+              }
+
+              override fun onDestroy() {
+                  player?.release()
+                  player = null
+                  super.onDestroy()
+              }
+          }
+          EOF
 
       - name: Build APK
+        shell: bash
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          chmod +x gradle-8.9/bin/gradle
+          ./gradle-8.9/bin/gradle --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Upload Royal Cinema APK
         uses: actions/upload-artifact@v4
         with:
-          name: Royal-IPTV-APK
+          name: Royal-Cinema-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-
+          if-no-files-found: error
