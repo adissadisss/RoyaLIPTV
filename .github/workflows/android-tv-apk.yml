@@ -29,7 +29,11 @@ jobs:
         run: |
           mkdir -p app/src/main/java/com/royal/cinema
           mkdir -p app/src/main/res/values
-
+          mkdir -p gradle
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          EOF
           cat > settings.gradle.kts <<'EOF'
           pluginManagement {
               repositories {
